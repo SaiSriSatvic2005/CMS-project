@@ -1,90 +1,152 @@
-// 1. Import required packages
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const mysql = require('mysql2/promise');
+'use client'; // This directive tells Next.js that this is a client-side component
 
-// 2. Setup Express App
-const app = express();
-app.use(cors()); // Enable CORS for all routes
-app.use(express.json()); // Middleware to parse JSON bodies
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 
-// 3. Database connection pool
-const dbPool = mysql.createPool({
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    port: process.env.DB_PORT, // Use the port from .env
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0
-});
+// The base URL for your backend API
+const API_URL = 'http://localhost:8080/api/products';
 
-// --- API ENDPOINTS ---
+export default function Home() {
+    // State variables
+    const [products, setProducts] = useState([]);
+    const [productName, setProductName] = useState('');
+    const [productDesc, setProductDesc] = useState('');
+    const [editingProduct, setEditingProduct] = useState(null); // To hold the product being edited
 
-// GET /api/products: Fetch all products for the CMS view (not soft-deleted)
-app.get('/api/products', async (req, res) => {
-    try {
-        const [rows] = await dbPool.query("SELECT * FROM Products WHERE is_deleted = FALSE ORDER BY created_at DESC");
-        res.json(rows);
-    } catch (error) {
-        res.status(500).json({ message: 'Error fetching products', error });
-    }
-});
+    // Fetch all products when the component loads
+    useEffect(() => {
+        fetchProducts();
+    }, []);
 
-// GET /api/products/live: Fetch only published products
-app.get('/api/products/live', async (req, res) => {
-    try {
-        const query = "SELECT product_id, product_name, product_desc FROM Products WHERE status = 'Published' AND is_deleted = FALSE;";
-        const [rows] = await dbPool.query(query);
-        res.json(rows);
-    } catch (error) {
-        res.status(500).json({ message: 'Error fetching live products', error });
-    }
-});
+    const fetchProducts = async () => {
+        try {
+            const response = await axios.get(API_URL);
+            setProducts(response.data);
+        } catch (error) {
+            console.error('Error fetching products:', error);
+        }
+    };
 
-// POST /api/products: Add a new product
-app.post('/api/products', async (req, res) => {
-    const { product_name, product_desc, created_by, status } = req.body;
-    try {
-        const query = "INSERT INTO Products (product_name, product_desc, created_by, status) VALUES (?, ?, ?, ?);";
-        await dbPool.query(query, [product_name, product_desc, created_by, status || 'Draft']);
-        res.status(201).json({ message: 'Product added successfully' });
-    } catch (error) {
-        res.status(500).json({ message: 'Error adding product', error });
-    }
-});
+    // Handle form submission for adding or editing a product
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        const productData = {
+            product_name: productName,
+            product_desc: productDesc,
+            // In a real app, user identity would come from an authentication system
+            created_by: 'cms_user', 
+            updated_by: 'cms_user' 
+        };
 
-// PUT /api/products/:id: Edit a product
-app.put('/api/products/:id', async (req, res) => {
-    const { id } = req.params;
-    const { product_name, product_desc, status, updated_by } = req.body;
-    try {
-        const query = "UPDATE Products SET product_name = ?, product_desc = ?, status = ?, updated_by = ? WHERE product_id = ?;";
-        await dbPool.query(query, [product_name, product_desc, status, updated_by, id]);
-        res.json({ message: 'Product updated successfully' });
-    } catch (error) {
-        res.status(500).json({ message: 'Error updating product', error });
-    }
-});
+        try {
+            if (editingProduct) {
+                // Update existing product
+                await axios.put(`${API_URL}/${editingProduct.product_id}`, productData);
+            } else {
+                // Add new product
+                await axios.post(API_URL, productData);
+            }
+            // Reset form and refetch products
+            resetForm();
+            fetchProducts();
+        } catch (error) {
+            console.error('Error saving product:', error);
+        }
+    };
 
-// DELETE /api/products/:id: Soft delete a product
-app.delete('/api/products/:id', async (req, res) => {
-    const { id } = req.params;
-    const { updated_by } = req.body; // Assuming the user's name is sent in the request body
-    try {
-        const query = "UPDATE Products SET is_deleted = TRUE, updated_by = ? WHERE product_id = ?;";
-        await dbPool.query(query, [updated_by, id]);
-        res.json({ message: 'Product deleted successfully' });
-    } catch (error) {
-        res.status(500).json({ message: 'Error deleting product', error });
-    }
-});
+    // Handle editing a product
+    const handleEdit = (product) => {
+        setEditingProduct(product);
+        setProductName(product.product_name);
+        setProductDesc(product.product_desc);
+    };
 
+    // Handle soft deleting a product
+    const handleDelete = async (productId) => {
+        if (window.confirm('Are you sure you want to delete this product?')) {
+            try {
+                await axios.delete(`${API_URL}/${productId}`, {
+                    data: { updated_by: 'cms_admin' }
+                });
+                fetchProducts(); // Refresh the list
+            } catch (error) {
+                console.error('Error deleting product:', error);
+            }
+        }
+    };
 
-// 4. Start the server
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-});
+    // Handle changing the status of a product (e.g., publishing)
+    const handleStatusChange = async (product, newStatus) => {
+        try {
+            const updatedProduct = { ...product, status: newStatus, updated_by: 'cms_publisher' };
+            await axios.put(`${API_URL}/${product.product_id}`, updatedProduct);
+            fetchProducts();
+        } catch (error) {
+            console.error('Error updating status:', error);
+        }
+    };
+    
+    const resetForm = () => {
+        setEditingProduct(null);
+        setProductName('');
+        setProductDesc('');
+    };
+
+    return (
+        <main style={{ fontFamily: 'sans-serif', padding: '2rem' }}>
+            <h1>Products Management</h1>
+
+            {/* Form for Adding/Editing Products */}
+            <form onSubmit={handleSubmit} style={{ marginBottom: '2rem', display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '500px' }}>
+                <h2>{editingProduct ? 'Edit Product' : 'Add New Product'}</h2>
+                <input
+                    type="text"
+                    placeholder="Product Name"
+                    value={productName}
+                    onChange={(e) => setProductName(e.target.value)}
+                    required
+                    style={{ padding: '0.5rem' }}
+                />
+                <textarea
+                    placeholder="Product Description"
+                    value={productDesc}
+                    onChange={(e) => setProductDesc(e.target.value)}
+                    style={{ padding: '0.5rem', minHeight: '100px' }}
+                />
+                <div>
+                    <button type="submit" style={{ padding: '0.5rem 1rem' }}>{editingProduct ? 'Update Product' : 'Add Product'}</button>
+                    {editingProduct && <button type="button" onClick={resetForm} style={{ marginLeft: '1rem' }}>Cancel</button>}
+                </div>
+            </form>
+
+            {/* Table of Existing Products */}
+            <h2>Existing Products</h2>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                    <tr style={{ backgroundColor: '#f2f2f2' }}>
+                        <th style={{ padding: '8px', border: '1px solid #ddd', textAlign: 'left' }}>Name</th>
+                        <th style={{ padding: '8px', border: '1px solid #ddd', textAlign: 'left' }}>Description</th>
+                        <th style={{ padding: '8px', border: '1px solid #ddd', textAlign: 'left' }}>Status</th>
+                        <th style={{ padding: '8px', border: '1px solid #ddd', textAlign: 'left' }}>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {products.map((product) => (
+                        <tr key={product.product_id}>
+                            <td style={{ padding: '8px', border: '1px solid #ddd' }}>{product.product_name}</td>
+                            <td style={{ padding: '8px', border: '1px solid #ddd' }}>{product.product_desc}</td>
+                            <td style={{ padding: '8px', border: '1px solid #ddd' }}>{product.status}</td>
+                            <td style={{ padding: '8px', border: '1px solid #ddd', display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                                <button onClick={() => handleEdit(product)}>Edit</button>
+                                <button onClick={() => handleDelete(product.product_id)} style={{backgroundColor: 'salmon'}}>Delete</button>
+                                {product.status !== 'Published' && <button onClick={() => handleStatusChange(product, 'Published')} style={{backgroundColor: 'lightgreen'}}>Publish</button>}
+                                {product.status !== 'Archived' && <button onClick={() => handleStatusChange(product, 'Archived')}>Archive</button>}
+                                {product.status !== 'Draft' && <button onClick={() => handleStatusChange(product, 'Draft')}>Set to Draft</button>}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </main>
+    );
+}
