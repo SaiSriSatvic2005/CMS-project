@@ -64,9 +64,7 @@ export default function Home() {
     const handleDelete = async (productId: number) => {
         if (window.confirm('Are you sure you want to delete this product?')) {
             try {
-                await axios.delete(`${API_URL}/${productId}`, {
-                    data: { updated_by: 'cms_admin' }
-                });
+                await axios.delete(`${API_URL}/${productId}`);
                 fetchProducts();
             } catch (error) {
                 console.error('Error deleting product:', error);
